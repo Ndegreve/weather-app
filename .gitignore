@@ -1,0 +1,53 @@
+# Claude Code local overrides
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+vendor/
+venv/
+.venv/
+
+# Build artifacts
+build/
+dist/
+out/
+*.egg-info/
+
+# Testing / Coverage
+.coverage
+htmlcov/
+coverage/
+*.lcov
+
+# Data
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Credentials (NEVER commit)
+credentials/
+*.pem
+*.key
+secrets.json
+token.json
