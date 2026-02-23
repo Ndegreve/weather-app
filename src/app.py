@@ -363,8 +363,8 @@ def _make_chat_callback(input_key: str):
 def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
     """Render the weather chat section with history and input.
 
-    Uses st.text_input with on_change callback for mobile keyboard
-    compatibility. Each tab gets its own input key to avoid conflicts.
+    Uses a visible labeled text_input with an Ask button beside it.
+    The label and button make it obvious this is tappable on mobile.
     """
     history_key = f"messages_{tab_key}"
     if history_key not in st.session_state:
@@ -377,19 +377,14 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
 
     api_key = config.get_anthropic_api_key()
 
-    st.markdown("---")
-
     if not api_key:
-        st.caption(
-            "Chat is not enabled. Add ANTHROPIC_API_KEY in "
-            "Streamlit app Settings \u2192 Secrets to ask questions."
-        )
         return
 
-    # Chat header
+    # Chat card with visible styling
     st.markdown(
-        '<div style="color:#f0f0f0;font-weight:600;font-size:1rem;margin-bottom:8px">'
-        '\U0001f4ac Ask about the weather</div>',
+        '<div class="weather-section">'
+        '<div class="weather-section-title">\U0001f4ac Weather Q&A</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -407,16 +402,21 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
                     unsafe_allow_html=True,
                 )
 
-    # Input — text_input with Enter to submit via callback
-    # Each tab has its own unique key to avoid Streamlit duplicate key errors
+    # Input row: text field + Ask button side by side
     input_key = f"chat_input_{tab_key}"
-    st.text_input(
-        "Type your question and press Enter",
-        key=input_key,
-        placeholder="Will it rain? Can I go for a run?",
-        on_change=_make_chat_callback(input_key),
-        label_visibility="collapsed",
-    )
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.text_input(
+            "\U0001f4ac Ask a question about the weather",
+            key=input_key,
+            placeholder="Will it rain? Should I bring a jacket?",
+            on_change=_make_chat_callback(input_key),
+        )
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)  # align with input
+        if st.button("\u2709\ufe0f Ask", key=f"chat_btn_{tab_key}", type="primary"):
+            _make_chat_callback(input_key)()
+            st.rerun()
 
 
 def _render_hourly_forecast(forecast: Forecast) -> None:
@@ -541,9 +541,9 @@ def _render_location_forecast(location_query: str, tab_key: str) -> None:
     # Layout (top to bottom):
     _render_header(forecast, location)
     _render_written_forecast(forecast)
+    _render_chat(forecast, location, tab_key)
     _render_hourly_forecast(forecast)
     _render_daily_forecast(forecast)
-    _render_chat(forecast, location, tab_key)
 
 
 # ---------------------------------------------------------------------------
