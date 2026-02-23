@@ -86,7 +86,8 @@ def ask_weather_question(
     Raises:
         ChatError: If the API key is missing or the API call fails.
     """
-    if not config.ANTHROPIC_API_KEY:
+    api_key = config.get_anthropic_api_key()
+    if not api_key:
         raise ChatError(
             "ANTHROPIC_API_KEY is not set. "
             "Please set it in your environment to use the chat feature."
@@ -106,7 +107,7 @@ def ask_weather_question(
     messages.append({"role": "user", "content": question})
 
     try:
-        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model=config.ANTHROPIC_MODEL,
             max_tokens=config.CHAT_MAX_TOKENS,

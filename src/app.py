@@ -80,14 +80,12 @@ def _get_weather_icon(short_forecast: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _inject_css() -> None:
-    """Inject CSS for clean, readable layout with good contrast."""
+    """Inject minimal CSS for hourly scroll and daily rows only.
+
+    All colors come from .streamlit/config.toml theme (forced light mode).
+    """
     st.markdown("""
     <style>
-    /* Clean white background, dark text — maximum readability */
-    .stApp {
-        background: #f8f9fa;
-    }
-
     /* Hourly scroll container */
     .hourly-row {
         display: flex;
@@ -117,7 +115,7 @@ def _inject_css() -> None:
     .hourly-item .h-temp {
         font-size: 0.95rem;
         font-weight: 700;
-        color: #1a1a1a;
+        color: #111;
     }
 
     /* Daily forecast rows */
@@ -125,13 +123,13 @@ def _inject_css() -> None:
         display: flex;
         align-items: center;
         padding: 10px 0;
-        border-bottom: 1px solid #e0e0e0;
+        border-bottom: 1px solid #ddd;
     }
     .daily-row .d-name {
         flex: 0 0 90px;
         font-weight: 600;
         font-size: 0.95rem;
-        color: #1a1a1a;
+        color: #111;
     }
     .daily-row .d-icon {
         flex: 0 0 40px;
@@ -142,7 +140,7 @@ def _inject_css() -> None:
         flex: 0 0 40px;
         text-align: right;
         font-size: 0.85rem;
-        color: #888;
+        color: #777;
     }
     .daily-row .d-bar {
         flex: 1;
@@ -156,22 +154,21 @@ def _inject_css() -> None:
         text-align: left;
         font-size: 0.95rem;
         font-weight: 600;
-        color: #1a1a1a;
+        color: #111;
     }
 
-    /* Card-style containers */
+    /* Section cards */
     .weather-section {
-        background: #ffffff;
+        background: #f0f2f6;
         border-radius: 14px;
         padding: 14px 16px;
         margin-bottom: 12px;
-        border: 1px solid #e8e8e8;
     }
     .weather-section-title {
         font-size: 0.8rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        color: #888;
+        color: #666;
         margin-bottom: 8px;
         font-weight: 600;
     }
@@ -276,7 +273,7 @@ def _render_written_forecast(forecast: Forecast) -> None:
 
 
 def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
-    """Render the chat as a simple form that works on mobile.
+    """Render the chat as a visible form that works on mobile.
 
     Uses st.form with a text input and submit button so the keyboard
     pops up reliably on phones.
@@ -285,15 +282,22 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
     if history_key not in st.session_state:
         st.session_state[history_key] = []
 
+    st.markdown("---")
+    st.markdown("**Have a question about the weather?**")
+
     # Show previous chat messages
     if st.session_state[history_key]:
         for msg in st.session_state[history_key]:
-            role_label = "You" if msg["role"] == "user" else "Weather AI"
-            st.markdown(f"**{role_label}:** {msg['content']}")
+            if msg["role"] == "user":
+                st.info(f"**You:** {msg['content']}")
+            else:
+                st.success(f"**Weather AI:** {msg['content']}")
 
-    if not config.ANTHROPIC_API_KEY:
+    api_key = config.get_anthropic_api_key()
+    if not api_key:
         st.caption(
-            "To enable chat, add ANTHROPIC_API_KEY in Streamlit app Settings > Secrets."
+            "Chat is not enabled. Add ANTHROPIC_API_KEY in "
+            "Streamlit app Settings > Secrets to ask questions."
         )
         return
 
@@ -304,7 +308,7 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
             placeholder="Should I bring an umbrella? Can I go for a run?",
             label_visibility="collapsed",
         )
-        submitted = st.form_submit_button("Ask")
+        submitted = st.form_submit_button("Ask", type="primary")
 
     if submitted and question:
         st.session_state[history_key].append({"role": "user", "content": question})
