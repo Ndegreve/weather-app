@@ -83,7 +83,7 @@ def _inject_css() -> None:
     """Inject CSS for dark-themed layout and weather sections.
 
     Dark background (#1a1a2e) with light text for high readability.
-    Tile backgrounds use a slightly lighter shade (#16213e) for depth.
+    Tile backgrounds use a lighter shade (#1e2d4d) for depth.
     """
     st.markdown("""
     <style>
@@ -193,7 +193,7 @@ def _inject_css() -> None:
 
     /* ===== SECTION CARDS ===== */
     .weather-section {
-        background: #16213e;
+        background: #1e2d4d;
         border-radius: 14px;
         padding: 14px 16px;
         margin-bottom: 12px;
@@ -315,19 +315,70 @@ def _render_written_forecast(forecast: Forecast) -> None:
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def _render_chat_history(tab_key: str) -> None:
-    """Show chat message history for this tab, inline with the forecast.
+def _make_chat_callback(input_key: str):
+    """Create a chat submission callback for a specific input key.
 
-    The actual chat input is rendered at the bottom of the page via
-    st.chat_input (outside tabs) for reliable mobile keyboard support.
+    Returns a closure that reads the question from the given session
+    state key, calls the Claude API, and stores the response.
+    """
+    def _on_submit():
+        question = st.session_state.get(input_key, "").strip()
+        if not question:
+            return
+
+        tab_key = st.session_state.get("active_tab_key", "search")
+        forecast = st.session_state.get("active_forecast")
+        location = st.session_state.get("active_location")
+
+        if not forecast or not location:
+            return
+
+        history_key = f"messages_{tab_key}"
+        if history_key not in st.session_state:
+            st.session_state[history_key] = []
+
+        st.session_state[history_key].append({"role": "user", "content": question})
+
+        try:
+            answer = ask_weather_question(
+                question=question,
+                forecast=forecast,
+                location=location,
+                chat_history=st.session_state[history_key][:-1],
+            )
+            st.session_state[history_key].append(
+                {"role": "assistant", "content": answer}
+            )
+        except ChatError as exc:
+            st.session_state[history_key].append(
+                {"role": "assistant", "content": f"Sorry, something went wrong: {exc}"}
+            )
+
+        # Clear the input for next question
+        st.session_state[input_key] = ""
+
+    return _on_submit
+
+
+def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
+    """Render the weather chat section with history and input.
+
+    Uses st.text_input with on_change callback for mobile keyboard
+    compatibility. Each tab gets its own input key to avoid conflicts.
     """
     history_key = f"messages_{tab_key}"
     if history_key not in st.session_state:
         st.session_state[history_key] = []
 
+    # Store active context for the callback
+    st.session_state["active_tab_key"] = tab_key
+    st.session_state["active_forecast"] = forecast
+    st.session_state["active_location"] = location
+
     api_key = config.get_anthropic_api_key()
 
     st.markdown("---")
+
     if not api_key:
         st.caption(
             "Chat is not enabled. Add ANTHROPIC_API_KEY in "
@@ -335,8 +386,14 @@ def _render_chat_history(tab_key: str) -> None:
         )
         return
 
-    st.markdown("**Ask about the weather** \u2014 type below \u2b07\ufe0f")
+    # Chat header
+    st.markdown(
+        '<div style="color:#f0f0f0;font-weight:600;font-size:1rem;margin-bottom:8px">'
+        '\U0001f4ac Ask about the weather</div>',
+        unsafe_allow_html=True,
+    )
 
+    # Show chat history
     if st.session_state[history_key]:
         for msg in st.session_state[history_key]:
             if msg["role"] == "user":
@@ -350,40 +407,16 @@ def _render_chat_history(tab_key: str) -> None:
                     unsafe_allow_html=True,
                 )
 
-
-def _handle_chat_input(question: str) -> None:
-    """Process a chat question using the active tab's forecast data.
-
-    Called from the page-level st.chat_input so the mobile keyboard
-    always opens reliably.
-    """
-    tab_key = st.session_state.get("active_tab_key", "search")
-    forecast = st.session_state.get("active_forecast")
-    location = st.session_state.get("active_location")
-
-    if not forecast or not location:
-        return
-
-    history_key = f"messages_{tab_key}"
-    if history_key not in st.session_state:
-        st.session_state[history_key] = []
-
-    st.session_state[history_key].append({"role": "user", "content": question})
-
-    try:
-        answer = ask_weather_question(
-            question=question,
-            forecast=forecast,
-            location=location,
-            chat_history=st.session_state[history_key][:-1],
-        )
-        st.session_state[history_key].append(
-            {"role": "assistant", "content": answer}
-        )
-    except ChatError as exc:
-        st.session_state[history_key].append(
-            {"role": "assistant", "content": f"Sorry, something went wrong: {exc}"}
-        )
+    # Input — text_input with Enter to submit via callback
+    # Each tab has its own unique key to avoid Streamlit duplicate key errors
+    input_key = f"chat_input_{tab_key}"
+    st.text_input(
+        "Type your question and press Enter",
+        key=input_key,
+        placeholder="Will it rain? Can I go for a run?",
+        on_change=_make_chat_callback(input_key),
+        label_visibility="collapsed",
+    )
 
 
 def _render_hourly_forecast(forecast: Forecast) -> None:
@@ -505,17 +538,12 @@ def _render_location_forecast(location_query: str, tab_key: str) -> None:
             st.error(str(exc))
             return
 
-    # Store active forecast/location for the page-level chat input
-    st.session_state["active_tab_key"] = tab_key
-    st.session_state["active_forecast"] = forecast
-    st.session_state["active_location"] = location
-
     # Layout (top to bottom):
     _render_header(forecast, location)
     _render_written_forecast(forecast)
     _render_hourly_forecast(forecast)
     _render_daily_forecast(forecast)
-    _render_chat_history(tab_key)
+    _render_chat(forecast, location, tab_key)
 
 
 # ---------------------------------------------------------------------------
@@ -617,15 +645,6 @@ def main():
                     tab_key = query.lower().replace(" ", "_").replace(",", "")
                     _render_location_forecast(query, tab_key)
 
-    # --- Page-level chat input (outside tabs for mobile keyboard) ---
-    # st.chat_input is Streamlit's native mobile-friendly input that
-    # pins to the bottom of the screen and reliably triggers the keyboard.
-    api_key = config.get_anthropic_api_key()
-    if api_key and st.session_state.get("active_forecast"):
-        question = st.chat_input("Ask about the weather...")
-        if question:
-            _handle_chat_input(question)
-            st.rerun()
 
 
 if __name__ == "__main__":
