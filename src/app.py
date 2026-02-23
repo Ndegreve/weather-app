@@ -3,7 +3,7 @@
 Run with: streamlit run src/app.py
 
 Features:
-- Enter any US location (city/state or zip code)
+- Home location + saved locations as tabs across the top
 - Written text forecast for the next 24 hours
 - Hourly temperature display
 - 7-day forecast with hi/lo temps
@@ -75,6 +75,41 @@ def _get_weather_icon(short_forecast: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Saved locations management
+# ---------------------------------------------------------------------------
+
+def _init_saved_locations() -> None:
+    """Initialize saved locations in session state if not present."""
+    if "saved_locations" not in st.session_state:
+        st.session_state.saved_locations = []
+    if "home_location" not in st.session_state:
+        st.session_state.home_location = None
+
+
+def _add_location(name: str) -> None:
+    """Add a location to saved locations (if not already there)."""
+    name = name.strip()
+    if not name:
+        return
+    existing = [loc for loc in st.session_state.saved_locations]
+    if name.lower() not in [loc.lower() for loc in existing]:
+        st.session_state.saved_locations.append(name)
+
+
+def _remove_location(name: str) -> None:
+    """Remove a location from saved locations."""
+    st.session_state.saved_locations = [
+        loc for loc in st.session_state.saved_locations
+        if loc.lower() != name.lower()
+    ]
+
+
+def _set_home(name: str) -> None:
+    """Set the home location."""
+    st.session_state.home_location = name.strip()
+
+
+# ---------------------------------------------------------------------------
 # Cached data-fetching helpers
 # ---------------------------------------------------------------------------
 
@@ -111,7 +146,6 @@ def _render_written_forecast(forecast: Forecast) -> None:
 
     st.subheader("Current Forecast")
 
-    # Show the first 2-3 periods (covers ~24 hours: today, tonight, tomorrow)
     for p in forecast.periods[:3]:
         icon = _get_weather_icon(p.short_forecast)
         st.markdown(f"**{icon} {p.name}** \u2014 {p.detailed_forecast}")
@@ -124,7 +158,6 @@ def _render_hourly_forecast(forecast: Forecast) -> None:
 
     st.subheader("Hourly Forecast")
 
-    # Show 12 hours at a time using Streamlit columns
     hours = forecast.hourly_periods[:12]
     cols = st.columns(len(hours))
 
@@ -137,7 +170,6 @@ def _render_hourly_forecast(forecast: Forecast) -> None:
             f"**{h.temperature}\u00b0**"
         )
 
-    # Show next 12 hours in an expander
     next_hours = forecast.hourly_periods[12:24]
     if next_hours:
         with st.expander("Next 12 hours"):
@@ -159,7 +191,6 @@ def _render_daily_forecast(forecast: Forecast) -> None:
 
     st.subheader("7-Day Forecast")
 
-    # Group periods into day/night pairs
     days: list[dict] = []
     i = 0
     while i < len(forecast.periods):
@@ -188,7 +219,6 @@ def _render_daily_forecast(forecast: Forecast) -> None:
 
         days.append(day_info)
 
-    # Render as columns (max 4 per row)
     row_size = 4
     for row_start in range(0, len(days), row_size):
         row = days[row_start : row_start + row_size]
@@ -210,7 +240,6 @@ def _render_daily_forecast(forecast: Forecast) -> None:
                 f"{day['short']}"
             )
 
-    # Expandable detailed forecasts
     with st.expander("Detailed Forecasts"):
         for day in days:
             st.markdown(f"**{day['name']}**: {day['detailed']}")
@@ -219,7 +248,7 @@ def _render_daily_forecast(forecast: Forecast) -> None:
                 st.markdown(f"**{night_name}**: {day['night_detailed']}")
 
 
-def _render_chat(forecast: Forecast, location: GeoLocation) -> None:
+def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
     """Render the conversational weather Q&A chat interface."""
     st.subheader("Ask About the Weather")
 
@@ -229,18 +258,20 @@ def _render_chat(forecast: Forecast, location: GeoLocation) -> None:
         )
         return
 
-    # Initialize chat history in session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    # Per-location chat history
+    history_key = f"messages_{tab_key}"
+    if history_key not in st.session_state:
+        st.session_state[history_key] = []
 
-    # Display existing messages
-    for msg in st.session_state.messages:
+    for msg in st.session_state[history_key]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
-    if prompt := st.chat_input("e.g., Will it rain tonight? Can I go for a run?"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    if prompt := st.chat_input(
+        "e.g., Will it rain tonight? Can I go for a run?",
+        key=f"chat_{tab_key}",
+    ):
+        st.session_state[history_key].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
@@ -251,14 +282,55 @@ def _render_chat(forecast: Forecast, location: GeoLocation) -> None:
                         question=prompt,
                         forecast=forecast,
                         location=location,
-                        chat_history=st.session_state.messages[:-1],
+                        chat_history=st.session_state[history_key][:-1],
                     )
                     st.markdown(answer)
-                    st.session_state.messages.append(
+                    st.session_state[history_key].append(
                         {"role": "assistant", "content": answer}
                     )
                 except ChatError as exc:
                     st.error(f"Could not get a response: {exc}")
+
+
+def _render_location_forecast(location_query: str, tab_key: str) -> None:
+    """Fetch and render the full forecast for a single location."""
+    with st.spinner("Finding location..."):
+        try:
+            loc_data = _cached_geocode(location_query)
+        except NonUSLocationError:
+            st.error("This app only supports US locations.")
+            return
+        except GeocodingError as exc:
+            st.error(str(exc))
+            return
+
+    location = GeoLocation(
+        latitude=loc_data["lat"],
+        longitude=loc_data["lon"],
+        display_name=loc_data["name"],
+    )
+    st.markdown(f"**{location.display_name}**")
+
+    with st.spinner("Fetching forecast from NWS..."):
+        try:
+            forecast = _cached_forecast(location.latitude, location.longitude)
+        except NWSPointNotFoundError:
+            st.error(
+                "The NWS does not have forecast data for this location. "
+                "Try a nearby city."
+            )
+            return
+        except NWSAPIError as exc:
+            st.error(str(exc))
+            return
+
+    _render_written_forecast(forecast)
+    st.divider()
+    _render_hourly_forecast(forecast)
+    st.divider()
+    _render_daily_forecast(forecast)
+    st.divider()
+    _render_chat(forecast, location, tab_key)
 
 
 # ---------------------------------------------------------------------------
@@ -273,71 +345,105 @@ def main():
         layout="wide",
     )
 
+    _init_saved_locations()
+
     st.title("\u26c5 US Weather Forecast")
     st.caption("Powered by the National Weather Service (NOAA/NWS)")
 
-    location_input = st.text_input(
-        "Enter a US location",
-        placeholder="e.g., Denver, CO  or  90210",
-        key="location_input",
-    )
+    # --- Sidebar: manage locations ---
+    with st.sidebar:
+        st.header("Manage Locations")
 
-    if not location_input:
-        st.info("Enter a city and state or zip code above to get started.")
-        return
+        # Set home location
+        st.subheader("Home Location")
+        home_input = st.text_input(
+            "Set your home city",
+            value=st.session_state.home_location or "",
+            placeholder="e.g., Denver, CO",
+            key="home_input",
+        )
+        if st.button("Set as Home", key="set_home_btn"):
+            if home_input.strip():
+                _set_home(home_input)
+                st.rerun()
 
-    # --- Geocode ---
-    with st.spinner("Finding location..."):
-        try:
-            loc_data = _cached_geocode(location_input)
-        except NonUSLocationError:
-            st.error(
-                "This app only supports US locations. "
-                "The National Weather Service only covers US territories."
-            )
-            return
-        except GeocodingError as exc:
-            st.error(str(exc))
-            return
+        if st.session_state.home_location:
+            st.success(f"Home: {st.session_state.home_location}")
 
-    location = GeoLocation(
-        latitude=loc_data["lat"],
-        longitude=loc_data["lon"],
-        display_name=loc_data["name"],
-    )
-    st.markdown(f"**{location.display_name}**")
+        # Add saved locations
+        st.subheader("Saved Locations")
+        new_location = st.text_input(
+            "Add a location",
+            placeholder="e.g., Miami, FL",
+            key="new_location_input",
+        )
+        if st.button("Add Location", key="add_loc_btn"):
+            if new_location.strip():
+                _add_location(new_location)
+                st.rerun()
 
-    # --- Fetch forecast ---
-    with st.spinner("Fetching forecast from NWS..."):
-        try:
-            forecast = _cached_forecast(location.latitude, location.longitude)
-        except NWSPointNotFoundError:
-            st.error(
-                "The NWS does not have forecast data for this location. "
-                "Try a nearby city."
-            )
-            return
-        except NWSAPIError as exc:
-            st.error(str(exc))
-            return
+        # List saved locations with remove buttons
+        if st.session_state.saved_locations:
+            for loc_name in st.session_state.saved_locations:
+                col1, col2 = st.columns([3, 1])
+                col1.write(loc_name)
+                if col2.button("X", key=f"remove_{loc_name}"):
+                    _remove_location(loc_name)
+                    st.rerun()
+        else:
+            st.caption("No saved locations yet.")
 
-    # --- Written forecast first (next 24 hours) ---
-    _render_written_forecast(forecast)
+    # --- Build the tab list ---
+    tab_names = []
+    tab_queries = []
 
-    st.divider()
+    if st.session_state.home_location:
+        tab_names.append(f"Home")
+        tab_queries.append(st.session_state.home_location)
 
-    # --- Hourly temperatures ---
-    _render_hourly_forecast(forecast)
+    for loc_name in st.session_state.saved_locations:
+        # Don't duplicate if same as home
+        if st.session_state.home_location and loc_name.lower() == st.session_state.home_location.lower():
+            continue
+        tab_names.append(loc_name)
+        tab_queries.append(loc_name)
 
-    st.divider()
+    # Always add a "Search" tab at the end
+    tab_names.append("Search")
+    tab_queries.append(None)
 
-    # --- 7-day outlook ---
-    _render_daily_forecast(forecast)
+    # --- Render tabs ---
+    if len(tab_names) == 1:
+        # Only the Search tab — no saved locations yet
+        st.info(
+            "Use the sidebar to set a Home location and add saved locations. "
+            "Or search for a location below."
+        )
+        location_input = st.text_input(
+            "Search for a US location",
+            placeholder="e.g., Denver, CO  or  90210",
+            key="search_input",
+        )
+        if location_input:
+            _render_location_forecast(location_input, "search")
+    else:
+        tabs = st.tabs(tab_names)
 
-    st.divider()
-
-    # --- Chat Q&A ---
-    _render_chat(forecast, location)
+        for i, tab in enumerate(tabs):
+            with tab:
+                query = tab_queries[i]
+                if query is None:
+                    # This is the Search tab
+                    location_input = st.text_input(
+                        "Search for a US location",
+                        placeholder="e.g., Denver, CO  or  90210",
+                        key="search_input",
+                    )
+                    if location_input:
+                        _render_location_forecast(location_input, "search")
+                else:
+                    tab_key = query.lower().replace(" ", "_").replace(",", "")
+                    _render_location_forecast(query, tab_key)
 
 
 if __name__ == "__main__":
