@@ -4,23 +4,22 @@ Run with: streamlit run src/app.py
 
 Features:
 - Enter any US location (city/state or zip code)
-- Visual hourly forecast for the current day (icons + temps)
-- 7-day forecast with hi/lo temps and weather icons
-- Detailed text forecast per period
+- Written text forecast for the next 24 hours
+- Hourly temperature display
+- 7-day forecast with hi/lo temps
 - Chat interface to ask questions about the weather
-- Dynamic background that reflects current conditions
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import streamlit as st
 
 from src import config
 from src.chat import ChatError, ask_weather_question
 from src.geocoding import GeocodingError, GeoLocation, NonUSLocationError, geocode_location
-from src.nws_client import Forecast, ForecastPeriod, HourlyPeriod, NWSAPIError, NWSPointNotFoundError, get_forecast
+from src.nws_client import Forecast, NWSAPIError, NWSPointNotFoundError, get_forecast
 
 
 # ---------------------------------------------------------------------------
@@ -67,142 +66,12 @@ _CONDITION_ICONS = {
 def _get_weather_icon(short_forecast: str) -> str:
     """Map a short forecast string to a weather emoji."""
     lower = short_forecast.lower().strip()
-    # Try exact match first
     if lower in _CONDITION_ICONS:
         return _CONDITION_ICONS[lower]
-    # Try substring match
     for key, icon in _CONDITION_ICONS.items():
         if key in lower:
             return icon
-    # Fallback
     return "\U0001f321\ufe0f"
-
-
-# ---------------------------------------------------------------------------
-# Dynamic background CSS based on weather conditions
-# ---------------------------------------------------------------------------
-
-_WEATHER_THEMES = {
-    "sunny": {
-        "bg": "linear-gradient(180deg, #87CEEB 0%, #E0F4FF 50%, #FFF8E7 100%)",
-        "text": "#1a1a2e",
-        "card_bg": "rgba(255, 255, 255, 0.85)",
-    },
-    "clear": {
-        "bg": "linear-gradient(180deg, #1a1a4e 0%, #2d3a8c 50%, #4a6fa5 100%)",
-        "text": "#e8e8f0",
-        "card_bg": "rgba(30, 30, 80, 0.75)",
-    },
-    "cloudy": {
-        "bg": "linear-gradient(180deg, #8e9eab 0%, #b8c6d4 50%, #d4dde6 100%)",
-        "text": "#2c3e50",
-        "card_bg": "rgba(255, 255, 255, 0.80)",
-    },
-    "rain": {
-        "bg": "linear-gradient(180deg, #4a5568 0%, #6b7b8d 50%, #8899a6 100%)",
-        "text": "#ecf0f1",
-        "card_bg": "rgba(40, 50, 60, 0.80)",
-    },
-    "snow": {
-        "bg": "linear-gradient(180deg, #ccd5db 0%, #e8edf2 50%, #f5f7fa 100%)",
-        "text": "#2c3e50",
-        "card_bg": "rgba(255, 255, 255, 0.90)",
-    },
-    "thunderstorm": {
-        "bg": "linear-gradient(180deg, #1a1a2e 0%, #2d2d44 50%, #434360 100%)",
-        "text": "#e8e8f0",
-        "card_bg": "rgba(30, 30, 50, 0.85)",
-    },
-    "fog": {
-        "bg": "linear-gradient(180deg, #a8b5c2 0%, #c4cdd5 50%, #dee4ea 100%)",
-        "text": "#3a4a5c",
-        "card_bg": "rgba(255, 255, 255, 0.75)",
-    },
-    "default": {
-        "bg": "linear-gradient(180deg, #667eea 0%, #764ba2 100%)",
-        "text": "#ffffff",
-        "card_bg": "rgba(255, 255, 255, 0.15)",
-    },
-}
-
-
-def _detect_weather_theme(short_forecast: str, is_daytime: bool) -> dict:
-    """Pick a background theme based on the current weather condition."""
-    lower = short_forecast.lower()
-
-    if any(w in lower for w in ("thunderstorm", "thunder")):
-        return _WEATHER_THEMES["thunderstorm"]
-    if any(w in lower for w in ("snow", "blizzard", "sleet", "ice", "freezing")):
-        return _WEATHER_THEMES["snow"]
-    if any(w in lower for w in ("rain", "shower", "drizzle")):
-        return _WEATHER_THEMES["rain"]
-    if any(w in lower for w in ("fog", "haze", "mist")):
-        return _WEATHER_THEMES["fog"]
-    if any(w in lower for w in ("cloudy", "overcast")):
-        return _WEATHER_THEMES["cloudy"]
-    if any(w in lower for w in ("sunny", "clear")):
-        if is_daytime:
-            return _WEATHER_THEMES["sunny"]
-        return _WEATHER_THEMES["clear"]
-
-    return _WEATHER_THEMES["default"]
-
-
-def _apply_theme(theme: dict) -> None:
-    """Inject CSS to style the page background and text."""
-    st.markdown(
-        f"""
-        <style>
-        .stApp {{
-            background: {theme["bg"]};
-            color: {theme["text"]};
-        }}
-        .stApp [data-testid="stHeader"] {{
-            background: transparent;
-        }}
-        .weather-card {{
-            background: {theme["card_bg"]};
-            border-radius: 12px;
-            padding: 16px;
-            margin: 4px;
-            text-align: center;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-        }}
-        .weather-card h3 {{
-            margin: 0 0 4px 0;
-            font-size: 0.9rem;
-        }}
-        .weather-icon {{
-            font-size: 2rem;
-            margin: 4px 0;
-        }}
-        .weather-temp {{
-            font-size: 1.4rem;
-            font-weight: bold;
-        }}
-        .weather-temp-range {{
-            font-size: 0.85rem;
-            opacity: 0.8;
-        }}
-        .weather-desc {{
-            font-size: 0.8rem;
-            opacity: 0.9;
-        }}
-        .hourly-scroll {{
-            display: flex;
-            overflow-x: auto;
-            gap: 8px;
-            padding: 8px 0;
-        }}
-        .hourly-scroll .weather-card {{
-            min-width: 80px;
-            flex-shrink: 0;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -235,42 +104,62 @@ def _parse_hour(start_time: str) -> str:
         return ""
 
 
+def _render_written_forecast(forecast: Forecast) -> None:
+    """Render a written text forecast for the next 24 hours (today + tonight)."""
+    if not forecast.periods:
+        return
+
+    st.subheader("Current Forecast")
+
+    # Show the first 2-3 periods (covers ~24 hours: today, tonight, tomorrow)
+    for p in forecast.periods[:3]:
+        icon = _get_weather_icon(p.short_forecast)
+        st.markdown(f"**{icon} {p.name}** \u2014 {p.detailed_forecast}")
+
+
 def _render_hourly_forecast(forecast: Forecast) -> None:
-    """Render the hourly forecast as a horizontally scrollable row."""
+    """Render the hourly forecast using native Streamlit columns."""
     if not forecast.hourly_periods:
         return
 
-    # Show first 24 hours
-    hours = forecast.hourly_periods[:24]
     st.subheader("Hourly Forecast")
 
-    cards_html = ""
-    for h in hours:
+    # Show 12 hours at a time using Streamlit columns
+    hours = forecast.hourly_periods[:12]
+    cols = st.columns(len(hours))
+
+    for col, h in zip(cols, hours):
         icon = _get_weather_icon(h.short_forecast)
         hour_label = _parse_hour(h.start_time)
-        cards_html += f"""
-        <div class="weather-card">
-            <h3>{hour_label}</h3>
-            <div class="weather-icon">{icon}</div>
-            <div class="weather-temp">{h.temperature}\u00b0{h.temperature_unit}</div>
-            <div class="weather-desc">{h.short_forecast}</div>
-        </div>
-        """
+        col.markdown(
+            f"**{hour_label}**\n\n"
+            f"{icon}\n\n"
+            f"**{h.temperature}\u00b0**"
+        )
 
-    st.markdown(
-        f'<div class="hourly-scroll">{cards_html}</div>',
-        unsafe_allow_html=True,
-    )
+    # Show next 12 hours in an expander
+    next_hours = forecast.hourly_periods[12:24]
+    if next_hours:
+        with st.expander("Next 12 hours"):
+            cols2 = st.columns(len(next_hours))
+            for col, h in zip(cols2, next_hours):
+                icon = _get_weather_icon(h.short_forecast)
+                hour_label = _parse_hour(h.start_time)
+                col.markdown(
+                    f"**{hour_label}**\n\n"
+                    f"{icon}\n\n"
+                    f"**{h.temperature}\u00b0**"
+                )
 
 
 def _render_daily_forecast(forecast: Forecast) -> None:
-    """Render the 7-day forecast as cards with hi/lo temps and icons."""
+    """Render the 7-day forecast using native Streamlit columns."""
     if not forecast.periods:
         return
 
     st.subheader("7-Day Forecast")
 
-    # Group periods into day/night pairs to show hi/lo
+    # Group periods into day/night pairs
     days: list[dict] = []
     i = 0
     while i < len(forecast.periods):
@@ -284,7 +173,6 @@ def _render_daily_forecast(forecast: Forecast) -> None:
         if p.is_daytime:
             day_info["high"] = p.temperature
             day_info["unit"] = p.temperature_unit
-            # Check if next period is the night counterpart
             if i + 1 < len(forecast.periods) and not forecast.periods[i + 1].is_daytime:
                 day_info["low"] = forecast.periods[i + 1].temperature
                 day_info["night_detailed"] = forecast.periods[i + 1].detailed_forecast
@@ -300,34 +188,26 @@ def _render_daily_forecast(forecast: Forecast) -> None:
 
         days.append(day_info)
 
-    # Render as columns (max 4 per row for readability)
+    # Render as columns (max 4 per row)
     row_size = 4
     for row_start in range(0, len(days), row_size):
         row = days[row_start : row_start + row_size]
         cols = st.columns(len(row))
         for col, day in zip(cols, row):
             icon = _get_weather_icon(day["short"])
-            temp_display = ""
+            temp_text = ""
             if day.get("high") is not None and day.get("low") is not None:
-                temp_display = (
-                    f'<div class="weather-temp">{day["high"]}\u00b0</div>'
-                    f'<div class="weather-temp-range">Lo: {day["low"]}\u00b0</div>'
-                )
+                temp_text = f"**{day['high']}\u00b0** / {day['low']}\u00b0"
             elif day.get("high") is not None:
-                temp_display = f'<div class="weather-temp">{day["high"]}\u00b0</div>'
+                temp_text = f"**{day['high']}\u00b0**"
             elif day.get("low") is not None:
-                temp_display = f'<div class="weather-temp">{day["low"]}\u00b0</div>'
+                temp_text = f"**{day['low']}\u00b0**"
 
             col.markdown(
-                f"""
-                <div class="weather-card">
-                    <h3>{day["name"]}</h3>
-                    <div class="weather-icon">{icon}</div>
-                    {temp_display}
-                    <div class="weather-desc">{day["short"]}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+                f"**{day['name']}**\n\n"
+                f"{icon}\n\n"
+                f"{temp_text}\n\n"
+                f"{day['short']}"
             )
 
     # Expandable detailed forecasts
@@ -441,16 +321,17 @@ def main():
             st.error(str(exc))
             return
 
-    # --- Apply dynamic background ---
-    if forecast.periods:
-        current = forecast.periods[0]
-        theme = _detect_weather_theme(current.short_forecast, current.is_daytime)
-    else:
-        theme = _WEATHER_THEMES["default"]
-    _apply_theme(theme)
+    # --- Written forecast first (next 24 hours) ---
+    _render_written_forecast(forecast)
 
-    # --- Visual dashboard ---
+    st.divider()
+
+    # --- Hourly temperatures ---
     _render_hourly_forecast(forecast)
+
+    st.divider()
+
+    # --- 7-day outlook ---
     _render_daily_forecast(forecast)
 
     st.divider()
