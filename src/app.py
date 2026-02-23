@@ -7,7 +7,7 @@ Layout (top to bottom):
 2. Written forecast description
 3. Chat box to ask questions
 4. Horizontally scrollable hourly forecast
-5. 10-day forecast list
+5. 7-day forecast list
 6. Saved location tabs
 """
 
@@ -76,13 +76,18 @@ def _get_weather_icon(short_forecast: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Global CSS — injected once at the top of every page
+# Global CSS
 # ---------------------------------------------------------------------------
 
 def _inject_css() -> None:
-    """Inject CSS for Apple Weather-style layout."""
+    """Inject CSS for clean, readable layout with good contrast."""
     st.markdown("""
     <style>
+    /* Clean white background, dark text — maximum readability */
+    .stApp {
+        background: #f8f9fa;
+    }
+
     /* Hourly scroll container */
     .hourly-row {
         display: flex;
@@ -102,6 +107,7 @@ def _inject_css() -> None:
     .hourly-item .h-time {
         font-size: 0.8rem;
         font-weight: 600;
+        color: #555;
         margin-bottom: 6px;
     }
     .hourly-item .h-icon {
@@ -111,6 +117,7 @@ def _inject_css() -> None:
     .hourly-item .h-temp {
         font-size: 0.95rem;
         font-weight: 700;
+        color: #1a1a1a;
     }
 
     /* Daily forecast rows */
@@ -118,12 +125,13 @@ def _inject_css() -> None:
         display: flex;
         align-items: center;
         padding: 10px 0;
-        border-bottom: 1px solid rgba(128,128,128,0.2);
+        border-bottom: 1px solid #e0e0e0;
     }
     .daily-row .d-name {
         flex: 0 0 90px;
         font-weight: 600;
         font-size: 0.95rem;
+        color: #1a1a1a;
     }
     .daily-row .d-icon {
         flex: 0 0 40px;
@@ -134,41 +142,36 @@ def _inject_css() -> None:
         flex: 0 0 40px;
         text-align: right;
         font-size: 0.85rem;
-        opacity: 0.6;
+        color: #888;
     }
     .daily-row .d-bar {
         flex: 1;
         height: 5px;
         border-radius: 3px;
-        background: linear-gradient(90deg, #5b9bd5, #f0ad4e);
+        background: linear-gradient(90deg, #74b9ff, #fdcb6e);
         margin: 0 8px;
-        opacity: 0.6;
     }
     .daily-row .d-hi {
         flex: 0 0 40px;
         text-align: left;
         font-size: 0.95rem;
         font-weight: 600;
-    }
-    .daily-row .d-desc {
-        flex: 1;
-        font-size: 0.8rem;
-        opacity: 0.7;
-        text-align: right;
+        color: #1a1a1a;
     }
 
     /* Card-style containers */
     .weather-section {
-        background: rgba(128,128,128,0.08);
+        background: #ffffff;
         border-radius: 14px;
         padding: 14px 16px;
         margin-bottom: 12px;
+        border: 1px solid #e8e8e8;
     }
     .weather-section-title {
         font-size: 0.8rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        opacity: 0.6;
+        color: #888;
         margin-bottom: 8px;
         font-weight: 600;
     }
@@ -248,8 +251,6 @@ def _render_header(forecast: Forecast, location: GeoLocation) -> None:
 
     current = forecast.periods[0]
     icon = _get_weather_icon(current.short_forecast)
-
-    # Short display name (just city, state)
     display = forecast.location_name if forecast.location_name else location.display_name
 
     st.markdown(f"### {display}")
@@ -275,61 +276,55 @@ def _render_written_forecast(forecast: Forecast) -> None:
 
 
 def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
-    """Render the chat box right below the written forecast.
+    """Render the chat as a simple form that works on mobile.
 
-    Always visible as a compact expander. Opens up when tapped.
-    Works even if ANTHROPIC_API_KEY is not set (shows a message).
+    Uses st.form with a text input and submit button so the keyboard
+    pops up reliably on phones.
     """
     history_key = f"messages_{tab_key}"
     if history_key not in st.session_state:
         st.session_state[history_key] = []
 
-    has_messages = len(st.session_state[history_key]) > 0
-    label = "Ask about the weather..." if not has_messages else "Weather chat"
-
-    with st.expander(label, expanded=has_messages):
-        if not config.ANTHROPIC_API_KEY:
-            st.caption(
-                "To enable the chat feature, add your ANTHROPIC_API_KEY "
-                "in the Streamlit app settings under Secrets."
-            )
-            return
-
-        st.caption("Ask anything \u2014 e.g., *Should I bring an umbrella?*")
-
-        # Show previous messages
+    # Show previous chat messages
+    if st.session_state[history_key]:
         for msg in st.session_state[history_key]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+            role_label = "You" if msg["role"] == "user" else "Weather AI"
+            st.markdown(f"**{role_label}:** {msg['content']}")
 
-        # Text input for the question (works better in expander than chat_input)
+    if not config.ANTHROPIC_API_KEY:
+        st.caption(
+            "To enable chat, add ANTHROPIC_API_KEY in Streamlit app Settings > Secrets."
+        )
+        return
+
+    # Use a form — this makes the keyboard pop up reliably on mobile
+    with st.form(key=f"chat_form_{tab_key}", clear_on_submit=True):
         question = st.text_input(
-            "Your question",
-            placeholder="Will it rain tonight?",
-            key=f"chat_input_{tab_key}",
+            "Ask about the weather",
+            placeholder="Should I bring an umbrella? Can I go for a run?",
             label_visibility="collapsed",
         )
-        if st.button("Ask", key=f"chat_btn_{tab_key}") and question:
-            st.session_state[history_key].append({"role": "user", "content": question})
-            with st.chat_message("user"):
-                st.markdown(question)
+        submitted = st.form_submit_button("Ask")
 
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    try:
-                        answer = ask_weather_question(
-                            question=question,
-                            forecast=forecast,
-                            location=location,
-                            chat_history=st.session_state[history_key][:-1],
-                        )
-                        st.markdown(answer)
-                        st.session_state[history_key].append(
-                            {"role": "assistant", "content": answer}
-                        )
-                    except ChatError as exc:
-                        st.error(f"Could not get a response: {exc}")
-            st.rerun()
+    if submitted and question:
+        st.session_state[history_key].append({"role": "user", "content": question})
+
+        with st.spinner("Thinking..."):
+            try:
+                answer = ask_weather_question(
+                    question=question,
+                    forecast=forecast,
+                    location=location,
+                    chat_history=st.session_state[history_key][:-1],
+                )
+                st.session_state[history_key].append(
+                    {"role": "assistant", "content": answer}
+                )
+            except ChatError as exc:
+                st.session_state[history_key].append(
+                    {"role": "assistant", "content": f"Sorry, something went wrong: {exc}"}
+                )
+        st.rerun()
 
 
 def _render_hourly_forecast(forecast: Forecast) -> None:
@@ -365,7 +360,6 @@ def _render_daily_forecast(forecast: Forecast) -> None:
     if not forecast.periods:
         return
 
-    # Group into day/night pairs
     days: list[dict] = []
     i = 0
     while i < len(forecast.periods):
@@ -452,20 +446,11 @@ def _render_location_forecast(location_query: str, tab_key: str) -> None:
             st.error(str(exc))
             return
 
-    # Apple Weather-style layout (top to bottom):
-    # 1. Big header with temp
+    # Layout (top to bottom):
     _render_header(forecast, location)
-
-    # 2. Written forecast
     _render_written_forecast(forecast)
-
-    # 3. Chat box
     _render_chat(forecast, location, tab_key)
-
-    # 4. Hourly scroll strip
     _render_hourly_forecast(forecast)
-
-    # 5. Daily forecast list
     _render_daily_forecast(forecast)
 
 
