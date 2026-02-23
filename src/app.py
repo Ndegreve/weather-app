@@ -377,16 +377,20 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
 
     api_key = config.get_anthropic_api_key()
 
-    if not api_key:
-        return
-
-    # Chat card with visible styling
+    # Always show the chat section — with or without API key
     st.markdown(
         '<div class="weather-section">'
         '<div class="weather-section-title">\U0001f4ac Weather Q&A</div>'
         '</div>',
         unsafe_allow_html=True,
     )
+
+    if not api_key:
+        st.warning(
+            "Chat is not enabled. Add ANTHROPIC_API_KEY in "
+            "Streamlit app Settings \u2192 Secrets to ask questions."
+        )
+        return
 
     # Show chat history
     if st.session_state[history_key]:
@@ -402,21 +406,17 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
                     unsafe_allow_html=True,
                 )
 
-    # Input row: text field + Ask button side by side
+    # Input: full-width text field with visible label
     input_key = f"chat_input_{tab_key}"
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        st.text_input(
-            "\U0001f4ac Ask a question about the weather",
-            key=input_key,
-            placeholder="Will it rain? Should I bring a jacket?",
-            on_change=_make_chat_callback(input_key),
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)  # align with input
-        if st.button("\u2709\ufe0f Ask", key=f"chat_btn_{tab_key}", type="primary"):
-            _make_chat_callback(input_key)()
-            st.rerun()
+    st.text_input(
+        "\U0001f4ac Ask a question about the weather",
+        key=input_key,
+        placeholder="Will it rain? Should I bring a jacket?",
+        on_change=_make_chat_callback(input_key),
+    )
+    if st.button("Ask \u2192", key=f"chat_btn_{tab_key}", type="primary", use_container_width=True):
+        _make_chat_callback(input_key)()
+        st.rerun()
 
 
 def _render_hourly_forecast(forecast: Forecast) -> None:
