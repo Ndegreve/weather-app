@@ -80,13 +80,47 @@ def _get_weather_icon(short_forecast: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _inject_css() -> None:
-    """Inject minimal CSS for hourly scroll and daily rows only.
+    """Inject CSS for dark-themed layout and weather sections.
 
-    All colors come from .streamlit/config.toml theme (forced light mode).
+    Dark background (#1a1a2e) with light text for high readability.
+    Tile backgrounds use a slightly lighter shade (#16213e) for depth.
     """
     st.markdown("""
     <style>
-    /* Hourly scroll container */
+    /* ===== HIGH CONTRAST LIGHT TEXT ON DARK ===== */
+    .stMarkdown, .stMarkdown p, .stMarkdown li,
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3,
+    .stCaption, [data-testid="stCaptionContainer"],
+    .stAlert p, .stAlert div {
+        color: #f0f0f0 !important;
+    }
+
+    /* Forecast description text */
+    .forecast-text {
+        color: #e8e8e8 !important;
+        font-size: 1rem;
+        line-height: 1.6;
+    }
+
+    /* Chat message styling — dark-friendly */
+    .chat-user {
+        background: #1e3a5f;
+        border-radius: 12px;
+        padding: 10px 14px;
+        margin: 6px 0;
+        color: #e8e8e8;
+        font-size: 0.95rem;
+    }
+    .chat-assistant {
+        background: #1a3d2e;
+        border-radius: 12px;
+        padding: 10px 14px;
+        margin: 6px 0;
+        color: #e8e8e8;
+        font-size: 0.95rem;
+    }
+
+    /* ===== HOURLY SCROLL ===== */
     .hourly-row {
         display: flex;
         overflow-x: auto;
@@ -105,7 +139,7 @@ def _inject_css() -> None:
     .hourly-item .h-time {
         font-size: 0.8rem;
         font-weight: 600;
-        color: #555;
+        color: #a0aec0;
         margin-bottom: 6px;
     }
     .hourly-item .h-icon {
@@ -115,21 +149,21 @@ def _inject_css() -> None:
     .hourly-item .h-temp {
         font-size: 0.95rem;
         font-weight: 700;
-        color: #111;
+        color: #f0f0f0;
     }
 
-    /* Daily forecast rows */
+    /* ===== DAILY FORECAST ===== */
     .daily-row {
         display: flex;
         align-items: center;
         padding: 10px 0;
-        border-bottom: 1px solid #ddd;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
     }
     .daily-row .d-name {
         flex: 0 0 90px;
         font-weight: 600;
         font-size: 0.95rem;
-        color: #111;
+        color: #f0f0f0;
     }
     .daily-row .d-icon {
         flex: 0 0 40px;
@@ -140,13 +174,13 @@ def _inject_css() -> None:
         flex: 0 0 40px;
         text-align: right;
         font-size: 0.85rem;
-        color: #777;
+        color: #8899aa;
     }
     .daily-row .d-bar {
         flex: 1;
         height: 5px;
         border-radius: 3px;
-        background: linear-gradient(90deg, #74b9ff, #fdcb6e);
+        background: linear-gradient(90deg, #4a90d9, #f0c040);
         margin: 0 8px;
     }
     .daily-row .d-hi {
@@ -154,12 +188,12 @@ def _inject_css() -> None:
         text-align: left;
         font-size: 0.95rem;
         font-weight: 600;
-        color: #111;
+        color: #f0f0f0;
     }
 
-    /* Section cards */
+    /* ===== SECTION CARDS ===== */
     .weather-section {
-        background: #f0f2f6;
+        background: #16213e;
         border-radius: 14px;
         padding: 14px 16px;
         margin-bottom: 12px;
@@ -168,7 +202,7 @@ def _inject_css() -> None:
         font-size: 0.8rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        color: #666;
+        color: #8899aa;
         margin-bottom: 8px;
         font-weight: 600;
     }
@@ -241,7 +275,7 @@ def _parse_hour(start_time: str) -> str:
 
 
 def _render_header(forecast: Forecast, location: GeoLocation) -> None:
-    """Render the big location name + current temp + conditions."""
+    """Render the big location name + current temp + conditions with high contrast."""
     if not forecast.periods:
         st.markdown(f"### {location.display_name}")
         return
@@ -250,15 +284,21 @@ def _render_header(forecast: Forecast, location: GeoLocation) -> None:
     icon = _get_weather_icon(current.short_forecast)
     display = forecast.location_name if forecast.location_name else location.display_name
 
-    st.markdown(f"### {display}")
     st.markdown(
-        f"# {icon} {current.temperature}\u00b0{current.temperature_unit}\n\n"
-        f"**{current.short_forecast}**"
+        f'<h3 style="color:#f0f0f0;margin-bottom:0">{display}</h3>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="color:#ffffff;font-size:2.5rem;font-weight:700;margin:4px 0">'
+        f'{icon} {current.temperature}\u00b0{current.temperature_unit}</div>'
+        f'<div style="color:#d0d0d0;font-size:1.1rem;font-weight:600;margin-bottom:12px">'
+        f'{current.short_forecast}</div>',
+        unsafe_allow_html=True,
     )
 
 
 def _render_written_forecast(forecast: Forecast) -> None:
-    """Render written text forecast for the next 24 hours."""
+    """Render written text forecast for the next 24 hours with high contrast."""
     if not forecast.periods:
         return
 
@@ -267,68 +307,83 @@ def _render_written_forecast(forecast: Forecast) -> None:
 
     for p in forecast.periods[:3]:
         icon = _get_weather_icon(p.short_forecast)
-        st.markdown(f"**{icon} {p.name}** \u2014 {p.detailed_forecast}")
+        st.markdown(
+            f'<div class="forecast-text"><strong>{icon} {p.name}</strong> — {p.detailed_forecast}</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
-    """Render the chat as a visible form that works on mobile.
+def _render_chat_history(tab_key: str) -> None:
+    """Show chat message history for this tab, inline with the forecast.
 
-    Uses st.form with a text input and submit button so the keyboard
-    pops up reliably on phones.
+    The actual chat input is rendered at the bottom of the page via
+    st.chat_input (outside tabs) for reliable mobile keyboard support.
     """
     history_key = f"messages_{tab_key}"
     if history_key not in st.session_state:
         st.session_state[history_key] = []
 
-    st.markdown("---")
-    st.markdown("**Have a question about the weather?**")
-
-    # Show previous chat messages
-    if st.session_state[history_key]:
-        for msg in st.session_state[history_key]:
-            if msg["role"] == "user":
-                st.info(f"**You:** {msg['content']}")
-            else:
-                st.success(f"**Weather AI:** {msg['content']}")
-
     api_key = config.get_anthropic_api_key()
+
+    st.markdown("---")
     if not api_key:
         st.caption(
             "Chat is not enabled. Add ANTHROPIC_API_KEY in "
-            "Streamlit app Settings > Secrets to ask questions."
+            "Streamlit app Settings \u2192 Secrets to ask questions."
         )
         return
 
-    # Use a form — this makes the keyboard pop up reliably on mobile
-    with st.form(key=f"chat_form_{tab_key}", clear_on_submit=True):
-        question = st.text_input(
-            "Ask about the weather",
-            placeholder="Should I bring an umbrella? Can I go for a run?",
-            label_visibility="collapsed",
+    st.markdown("**Ask about the weather** \u2014 type below \u2b07\ufe0f")
+
+    if st.session_state[history_key]:
+        for msg in st.session_state[history_key]:
+            if msg["role"] == "user":
+                st.markdown(
+                    f'<div class="chat-user"><strong>You:</strong> {msg["content"]}</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div class="chat-assistant"><strong>Weather AI:</strong> {msg["content"]}</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+def _handle_chat_input(question: str) -> None:
+    """Process a chat question using the active tab's forecast data.
+
+    Called from the page-level st.chat_input so the mobile keyboard
+    always opens reliably.
+    """
+    tab_key = st.session_state.get("active_tab_key", "search")
+    forecast = st.session_state.get("active_forecast")
+    location = st.session_state.get("active_location")
+
+    if not forecast or not location:
+        return
+
+    history_key = f"messages_{tab_key}"
+    if history_key not in st.session_state:
+        st.session_state[history_key] = []
+
+    st.session_state[history_key].append({"role": "user", "content": question})
+
+    try:
+        answer = ask_weather_question(
+            question=question,
+            forecast=forecast,
+            location=location,
+            chat_history=st.session_state[history_key][:-1],
         )
-        submitted = st.form_submit_button("Ask", type="primary")
-
-    if submitted and question:
-        st.session_state[history_key].append({"role": "user", "content": question})
-
-        with st.spinner("Thinking..."):
-            try:
-                answer = ask_weather_question(
-                    question=question,
-                    forecast=forecast,
-                    location=location,
-                    chat_history=st.session_state[history_key][:-1],
-                )
-                st.session_state[history_key].append(
-                    {"role": "assistant", "content": answer}
-                )
-            except ChatError as exc:
-                st.session_state[history_key].append(
-                    {"role": "assistant", "content": f"Sorry, something went wrong: {exc}"}
-                )
-        st.rerun()
+        st.session_state[history_key].append(
+            {"role": "assistant", "content": answer}
+        )
+    except ChatError as exc:
+        st.session_state[history_key].append(
+            {"role": "assistant", "content": f"Sorry, something went wrong: {exc}"}
+        )
 
 
 def _render_hourly_forecast(forecast: Forecast) -> None:
@@ -450,12 +505,17 @@ def _render_location_forecast(location_query: str, tab_key: str) -> None:
             st.error(str(exc))
             return
 
+    # Store active forecast/location for the page-level chat input
+    st.session_state["active_tab_key"] = tab_key
+    st.session_state["active_forecast"] = forecast
+    st.session_state["active_location"] = location
+
     # Layout (top to bottom):
     _render_header(forecast, location)
     _render_written_forecast(forecast)
-    _render_chat(forecast, location, tab_key)
     _render_hourly_forecast(forecast)
     _render_daily_forecast(forecast)
+    _render_chat_history(tab_key)
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +616,16 @@ def main():
                 else:
                     tab_key = query.lower().replace(" ", "_").replace(",", "")
                     _render_location_forecast(query, tab_key)
+
+    # --- Page-level chat input (outside tabs for mobile keyboard) ---
+    # st.chat_input is Streamlit's native mobile-friendly input that
+    # pins to the bottom of the screen and reliably triggers the keyboard.
+    api_key = config.get_anthropic_api_key()
+    if api_key and st.session_state.get("active_forecast"):
+        question = st.chat_input("Ask about the weather...")
+        if question:
+            _handle_chat_input(question)
+            st.rerun()
 
 
 if __name__ == "__main__":
