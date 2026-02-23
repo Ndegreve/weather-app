@@ -275,42 +275,61 @@ def _render_written_forecast(forecast: Forecast) -> None:
 
 
 def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
-    """Render the chat box right below the written forecast."""
-    if not config.ANTHROPIC_API_KEY:
-        return
+    """Render the chat box right below the written forecast.
 
+    Always visible as a compact expander. Opens up when tapped.
+    Works even if ANTHROPIC_API_KEY is not set (shows a message).
+    """
     history_key = f"messages_{tab_key}"
     if history_key not in st.session_state:
         st.session_state[history_key] = []
 
-    # Show previous messages
-    for msg in st.session_state[history_key]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    has_messages = len(st.session_state[history_key]) > 0
+    label = "Ask about the weather..." if not has_messages else "Weather chat"
 
-    if prompt := st.chat_input(
-        "Ask about the weather...",
-        key=f"chat_{tab_key}",
-    ):
-        st.session_state[history_key].append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    with st.expander(label, expanded=has_messages):
+        if not config.ANTHROPIC_API_KEY:
+            st.caption(
+                "To enable the chat feature, add your ANTHROPIC_API_KEY "
+                "in the Streamlit app settings under Secrets."
+            )
+            return
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    answer = ask_weather_question(
-                        question=prompt,
-                        forecast=forecast,
-                        location=location,
-                        chat_history=st.session_state[history_key][:-1],
-                    )
-                    st.markdown(answer)
-                    st.session_state[history_key].append(
-                        {"role": "assistant", "content": answer}
-                    )
-                except ChatError as exc:
-                    st.error(f"Could not get a response: {exc}")
+        st.caption("Ask anything \u2014 e.g., *Should I bring an umbrella?*")
+
+        # Show previous messages
+        for msg in st.session_state[history_key]:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Text input for the question (works better in expander than chat_input)
+        question = st.text_input(
+            "Your question",
+            placeholder="Will it rain tonight?",
+            key=f"chat_input_{tab_key}",
+            label_visibility="collapsed",
+        )
+        if st.button("Ask", key=f"chat_btn_{tab_key}") and question:
+            st.session_state[history_key].append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    try:
+                        answer = ask_weather_question(
+                            question=question,
+                            forecast=forecast,
+                            location=location,
+                            chat_history=st.session_state[history_key][:-1],
+                        )
+                        st.markdown(answer)
+                        st.session_state[history_key].append(
+                            {"role": "assistant", "content": answer}
+                        )
+                    except ChatError as exc:
+                        st.error(f"Could not get a response: {exc}")
+            st.rerun()
 
 
 def _render_hourly_forecast(forecast: Forecast) -> None:
