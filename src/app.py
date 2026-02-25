@@ -1,14 +1,10 @@
-"""Streamlit app for US weather forecasts — Apple Weather style.
+"""Apple Weather-style Streamlit app for US weather forecasts.
 
 Run with: streamlit run src/app.py
 
-Layout (top to bottom):
-1. Location name + current temp
-2. Written forecast description
-3. Chat box to ask questions
-4. Horizontally scrollable hourly forecast
-5. 7-day forecast list
-6. Saved location tabs
+Replicates the Apple Weather layout with glassmorphism cards,
+dynamic gradient backgrounds, temperature-colored bars, and
+weather detail cards. Includes AI-powered Q&A via Claude.
 """
 
 from __future__ import annotations
@@ -21,13 +17,14 @@ from src import config
 from src.chat import ChatError, ask_weather_question
 from src.geocoding import GeocodingError, GeoLocation, NonUSLocationError, geocode_location
 from src.nws_client import Forecast, NWSAPIError, NWSPointNotFoundError, get_forecast
+from src.nws_extended import ExtendedData, get_extended_data
 
 
 # ---------------------------------------------------------------------------
 # Weather condition -> emoji mapping
 # ---------------------------------------------------------------------------
 
-_CONDITION_ICONS = {
+_CONDITION_ICONS: dict[str, str] = {
     "sunny": "\u2600\ufe0f",
     "clear": "\u2600\ufe0f",
     "mostly sunny": "\U0001f324\ufe0f",
@@ -76,136 +73,360 @@ def _get_weather_icon(short_forecast: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Global CSS
+# Dynamic gradient backgrounds
 # ---------------------------------------------------------------------------
 
-def _inject_css() -> None:
-    """Inject CSS for dark-themed layout and weather sections.
+_WEATHER_GRADIENTS: dict[str, str] = {
+    "clear_day": "linear-gradient(180deg, #1e88e5 0%, #42a5f5 40%, #64b5f6 100%)",
+    "clear_night": "linear-gradient(180deg, #0d1b2a 0%, #1b2838 50%, #1a2744 100%)",
+    "cloudy_day": "linear-gradient(180deg, #546e7a 0%, #78909c 50%, #90a4ae 100%)",
+    "cloudy_night": "linear-gradient(180deg, #263238 0%, #37474f 50%, #455a64 100%)",
+    "rain": "linear-gradient(180deg, #37474f 0%, #455a64 50%, #546e7a 100%)",
+    "snow": "linear-gradient(180deg, #546e7a 0%, #78909c 50%, #90a4ae 100%)",
+    "storm": "linear-gradient(180deg, #1a1a2e 0%, #2d2d44 50%, #1a1a2e 100%)",
+    "fog": "linear-gradient(180deg, #607d8b 0%, #78909c 50%, #90a4ae 100%)",
+    "default": "linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+}
 
-    Dark background (#1a1a2e) with light text for high readability.
-    Tile backgrounds use a lighter shade (#1e2d4d) for depth.
+
+def _get_gradient(short_forecast: str, is_daytime: bool) -> str:
+    """Choose a background gradient based on weather conditions and time."""
+    lower = short_forecast.lower()
+    if any(w in lower for w in ("thunderstorm", "thunder")):
+        return _WEATHER_GRADIENTS["storm"]
+    if any(w in lower for w in ("rain", "shower", "drizzle")):
+        return _WEATHER_GRADIENTS["rain"]
+    if any(w in lower for w in ("snow", "blizzard", "sleet", "ice", "freezing")):
+        return _WEATHER_GRADIENTS["snow"]
+    if any(w in lower for w in ("fog", "haze", "mist")):
+        return _WEATHER_GRADIENTS["fog"]
+    if any(w in lower for w in ("cloudy", "overcast", "mostly cloudy")):
+        return _WEATHER_GRADIENTS["cloudy_night"] if not is_daytime else _WEATHER_GRADIENTS["cloudy_day"]
+    if any(w in lower for w in ("sunny", "clear", "mostly sunny", "mostly clear")):
+        return _WEATHER_GRADIENTS["clear_night"] if not is_daytime else _WEATHER_GRADIENTS["clear_day"]
+    return _WEATHER_GRADIENTS["default"]
+
+
+# ---------------------------------------------------------------------------
+# Temperature color mapping (Apple Weather style)
+# ---------------------------------------------------------------------------
+
+def _temp_to_color(temp_f: int) -> str:
+    """Map a temperature (F) to an Apple Weather-style color.
+
+    Returns a CSS color string.
     """
-    st.markdown("""
+    if temp_f <= 10:
+        return "#4a148c"  # deep purple — frigid
+    if temp_f <= 32:
+        return "#5c6bc0"  # indigo — freezing
+    if temp_f <= 50:
+        return "#42a5f5"  # blue — cold
+    if temp_f <= 65:
+        return "#26c6da"  # cyan — cool
+    if temp_f <= 75:
+        return "#66bb6a"  # green — comfortable
+    if temp_f <= 85:
+        return "#ffca28"  # amber — warm
+    if temp_f <= 95:
+        return "#ff7043"  # deep orange — hot
+    return "#ef5350"  # red — extreme heat
+
+
+def _compute_temp_bars(days: list[dict]) -> list[dict]:
+    """Compute temperature bar positions and color gradients.
+
+    Each day's bar is positioned relative to the overall min/max
+    across all days, matching Apple Weather's visualization.
+    """
+    all_lows = [d["low"] for d in days if d.get("low") is not None]
+    all_highs = [d["high"] for d in days if d.get("high") is not None]
+
+    if not all_lows or not all_highs:
+        return days
+
+    global_min = min(all_lows)
+    global_max = max(all_highs)
+    spread = max(global_max - global_min, 1)
+
+    for day in days:
+        lo = day.get("low") if day.get("low") is not None else global_min
+        hi = day.get("high") if day.get("high") is not None else global_max
+
+        day["bar_left_pct"] = ((lo - global_min) / spread) * 100
+        day["bar_width_pct"] = max(((hi - lo) / spread) * 100, 3)
+        day["bar_color_lo"] = _temp_to_color(lo)
+        day["bar_color_hi"] = _temp_to_color(hi)
+
+    return days
+
+
+# ---------------------------------------------------------------------------
+# CSS injection — Apple Weather glassmorphism
+# ---------------------------------------------------------------------------
+
+def _inject_css(gradient: str) -> None:
+    """Inject Apple Weather-style CSS with glassmorphism and dynamic gradient."""
+    st.markdown(f"""
     <style>
-    /* ===== HIGH CONTRAST LIGHT TEXT ON DARK ===== */
-    .stMarkdown, .stMarkdown p, .stMarkdown li,
-    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3,
-    .stCaption, [data-testid="stCaptionContainer"],
-    .stAlert p, .stAlert div {
-        color: #f0f0f0 !important;
-    }
+    /* ===== PAGE BACKGROUND ===== */
+    .stApp {{
+        background: {gradient} !important;
+    }}
 
-    /* Forecast description text */
-    .forecast-text {
-        color: #e8e8e8 !important;
+    /* Hide Streamlit chrome for cleaner look */
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    .block-container {{
+        padding-top: 1rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 600px !important;
+    }}
+
+    /* ===== GLASS CARD ===== */
+    .glass-card {{
+        background: rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        padding: 16px;
+        margin-bottom: 14px;
+    }}
+
+    /* ===== SECTION LABEL ===== */
+    .section-label {{
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: rgba(255, 255, 255, 0.55);
+        margin-bottom: 10px;
+        font-weight: 600;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }}
+
+    /* ===== CURRENT CONDITIONS HEADER ===== */
+    .wx-header {{
+        text-align: center;
+        padding: 10px 0 16px 0;
+    }}
+    .wx-location {{
+        font-size: 1.4rem;
+        color: rgba(255, 255, 255, 0.95);
+        font-weight: 500;
+        margin-bottom: 2px;
+    }}
+    .wx-temp {{
+        font-size: 5rem;
+        font-weight: 200;
+        color: #ffffff;
+        line-height: 1.05;
+        margin: 0;
+    }}
+    .wx-condition {{
+        font-size: 1.1rem;
+        color: rgba(255, 255, 255, 0.8);
+        margin: 4px 0;
+    }}
+    .wx-hilo {{
         font-size: 1rem;
-        line-height: 1.6;
-    }
-
-    /* Chat message styling — dark-friendly */
-    .chat-user {
-        background: #1e3a5f;
-        border-radius: 12px;
-        padding: 10px 14px;
-        margin: 6px 0;
-        color: #e8e8e8;
-        font-size: 0.95rem;
-    }
-    .chat-assistant {
-        background: #1a3d2e;
-        border-radius: 12px;
-        padding: 10px 14px;
-        margin: 6px 0;
-        color: #e8e8e8;
-        font-size: 0.95rem;
-    }
+        color: rgba(255, 255, 255, 0.7);
+    }}
 
     /* ===== HOURLY SCROLL ===== */
-    .hourly-row {
+    .hourly-row {{
         display: flex;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
         gap: 0;
-        padding: 12px 0;
+        padding: 4px 0;
         scrollbar-width: none;
-    }
-    .hourly-row::-webkit-scrollbar { display: none; }
+    }}
+    .hourly-row::-webkit-scrollbar {{ display: none; }}
 
-    .hourly-item {
-        flex: 0 0 65px;
+    .hourly-item {{
+        flex: 0 0 62px;
         text-align: center;
-        padding: 8px 4px;
-    }
-    .hourly-item .h-time {
-        font-size: 0.8rem;
+        padding: 6px 2px;
+    }}
+    .hourly-item .h-time {{
+        font-size: 0.78rem;
         font-weight: 600;
-        color: #a0aec0;
+        color: rgba(255,255,255,0.85);
         margin-bottom: 6px;
-    }
-    .hourly-item .h-icon {
-        font-size: 1.4rem;
-        margin-bottom: 4px;
-    }
-    .hourly-item .h-temp {
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: #f0f0f0;
-    }
+    }}
+    .hourly-item .h-precip {{
+        font-size: 0.7rem;
+        color: #64b5f6;
+        font-weight: 600;
+        margin-bottom: 2px;
+        min-height: 14px;
+    }}
+    .hourly-item .h-icon {{
+        font-size: 1.3rem;
+        margin-bottom: 6px;
+    }}
+    .hourly-item .h-temp {{
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #ffffff;
+    }}
 
     /* ===== DAILY FORECAST ===== */
-    .daily-row {
+    .daily-row {{
         display: flex;
         align-items: center;
         padding: 10px 0;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-    .daily-row .d-name {
-        flex: 0 0 90px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }}
+    .daily-row:last-child {{ border-bottom: none; }}
+    .daily-row .d-name {{
+        flex: 0 0 55px;
         font-weight: 600;
-        font-size: 0.95rem;
-        color: #f0f0f0;
-    }
-    .daily-row .d-icon {
-        flex: 0 0 40px;
-        font-size: 1.3rem;
+        font-size: 0.9rem;
+        color: #ffffff;
+    }}
+    .daily-row .d-icon {{
+        flex: 0 0 35px;
+        font-size: 1.2rem;
         text-align: center;
-    }
-    .daily-row .d-lo {
-        flex: 0 0 40px;
+    }}
+    .daily-row .d-lo {{
+        flex: 0 0 32px;
         text-align: right;
         font-size: 0.85rem;
-        color: #8899aa;
-    }
-    .daily-row .d-bar {
+        color: rgba(255,255,255,0.5);
+        font-weight: 500;
+    }}
+    .daily-row .d-bar-track {{
         flex: 1;
         height: 5px;
         border-radius: 3px;
-        background: linear-gradient(90deg, #4a90d9, #f0c040);
+        background: rgba(255, 255, 255, 0.12);
         margin: 0 8px;
-    }
-    .daily-row .d-hi {
-        flex: 0 0 40px;
+        position: relative;
+        overflow: hidden;
+    }}
+    .daily-row .d-bar-fill {{
+        position: absolute;
+        top: 0;
+        height: 100%;
+        border-radius: 3px;
+    }}
+    .daily-row .d-hi {{
+        flex: 0 0 32px;
         text-align: left;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         font-weight: 600;
-        color: #f0f0f0;
-    }
+        color: #ffffff;
+    }}
 
-    /* ===== SECTION CARDS ===== */
-    .weather-section {
-        background: #1e2d4d;
-        border-radius: 14px;
-        padding: 14px 16px;
-        margin-bottom: 12px;
-    }
-    .weather-section-title {
-        font-size: 0.8rem;
+    /* ===== DETAIL CARDS ===== */
+    .detail-card {{
+        background: rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        padding: 14px;
+        min-height: 130px;
+    }}
+    .detail-label {{
+        font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        color: #8899aa;
+        color: rgba(255, 255, 255, 0.5);
         margin-bottom: 8px;
         font-weight: 600;
-    }
+    }}
+    .detail-value {{
+        font-size: 1.8rem;
+        font-weight: 400;
+        color: #ffffff;
+        margin-bottom: 4px;
+        line-height: 1.1;
+    }}
+    .detail-note {{
+        font-size: 0.78rem;
+        color: rgba(255, 255, 255, 0.55);
+        line-height: 1.3;
+    }}
+
+    /* ===== CHAT BUBBLES ===== */
+    .chat-user {{
+        background: rgba(33, 150, 243, 0.25);
+        backdrop-filter: blur(10px);
+        border-radius: 16px 16px 4px 16px;
+        padding: 10px 14px;
+        margin: 6px 0;
+        color: #ffffff;
+        font-size: 0.9rem;
+    }}
+    .chat-assistant {{
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border-radius: 16px 16px 16px 4px;
+        padding: 10px 14px;
+        margin: 6px 0;
+        color: rgba(255,255,255,0.9);
+        font-size: 0.9rem;
+    }}
+
+    /* ===== STREAMLIT OVERRIDES ===== */
+    .stMarkdown, .stMarkdown p, .stMarkdown li,
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
+        color: #ffffff !important;
+    }}
+    .stTextInput > div > div > input {{
+        background: rgba(255, 255, 255, 0.1) !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        color: #ffffff !important;
+        border-radius: 12px !important;
+    }}
+    .stTextInput label {{
+        color: rgba(255,255,255,0.7) !important;
+    }}
+
+    /* Tab styling — Apple-style dot navigation */
+    .stTabs [data-baseweb="tab-list"] {{
+        justify-content: center;
+        gap: 8px;
+        background: transparent !important;
+        border-bottom: none !important;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        font-size: 0.8rem !important;
+        padding: 6px 14px !important;
+        border-radius: 20px !important;
+        background: rgba(255,255,255,0.1) !important;
+        color: rgba(255,255,255,0.7) !important;
+        border: none !important;
+    }}
+    .stTabs [aria-selected="true"] {{
+        background: rgba(255,255,255,0.25) !important;
+        color: #ffffff !important;
+    }}
+
+    /* Button styling */
+    .stButton > button[kind="primary"] {{
+        background: rgba(255,255,255,0.15) !important;
+        border: 1px solid rgba(255,255,255,0.2) !important;
+        color: #ffffff !important;
+        border-radius: 12px !important;
+    }}
+
+    /* Expander styling */
+    .streamlit-expanderHeader {{
+        color: rgba(255,255,255,0.7) !important;
+    }}
+
+    /* Warning/info boxes */
+    .stAlert {{
+        background: rgba(255,255,255,0.08) !important;
+        border: 1px solid rgba(255,255,255,0.15) !important;
+        border-radius: 12px !important;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -261,59 +482,297 @@ def _cached_forecast(lat: float, lon: float) -> Forecast:
     return get_forecast(lat, lon)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_extended(lat: float, lon: float) -> ExtendedData:
+    """Fetch extended weather data (cached for 10 minutes)."""
+    try:
+        return get_extended_data(lat, lon)
+    except Exception:
+        return ExtendedData()
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
 
 def _parse_hour(start_time: str) -> str:
-    """Extract a short hour label like '3pm' from an ISO timestamp."""
+    """Extract a short hour label like '3PM' from an ISO timestamp."""
     try:
         dt = datetime.fromisoformat(start_time)
-        return dt.strftime("%-I%p").lower()
+        return dt.strftime("%-I%p")
     except (ValueError, TypeError):
         return ""
 
 
-def _render_header(forecast: Forecast, location: GeoLocation) -> None:
-    """Render the big location name + current temp + conditions with high contrast."""
+def _get_day_abbrev(name: str) -> str:
+    """Convert a period name to a short day abbreviation."""
+    name = name.replace("This Afternoon", "Today")
+    if name in ("Today", "Tonight"):
+        return name[:3]
+    # NWS names like "Tuesday", "Wednesday Night" etc.
+    return name[:3]
+
+
+# ---------------------------------------------------------------------------
+# Render: Current conditions header
+# ---------------------------------------------------------------------------
+
+def _render_header(
+    forecast: Forecast,
+    location: GeoLocation,
+    extended: ExtendedData,
+) -> None:
+    """Render the Apple Weather-style centered current conditions."""
     if not forecast.periods:
         st.markdown(f"### {location.display_name}")
         return
 
-    current = forecast.periods[0]
-    icon = _get_weather_icon(current.short_forecast)
+    current_period = forecast.periods[0]
     display = forecast.location_name if forecast.location_name else location.display_name
 
-    st.markdown(
-        f'<h3 style="color:#f0f0f0;margin-bottom:0">{display}</h3>',
-        unsafe_allow_html=True,
+    # Use observation station temp if available, otherwise forecast
+    if extended.current and extended.current.temperature_f is not None:
+        temp = extended.current.temperature_f
+    else:
+        temp = current_period.temperature
+
+    condition = (
+        extended.current.description
+        if extended.current and extended.current.description
+        else current_period.short_forecast
     )
+
+    # Get H/L from forecast periods
+    hi = current_period.temperature if current_period.is_daytime else None
+    lo = None
+    if len(forecast.periods) > 1:
+        if current_period.is_daytime and not forecast.periods[1].is_daytime:
+            lo = forecast.periods[1].temperature
+        elif not current_period.is_daytime:
+            lo = current_period.temperature
+            if len(forecast.periods) > 1 and forecast.periods[1].is_daytime:
+                hi = forecast.periods[1].temperature
+
+    hilo_parts = []
+    if hi is not None:
+        hilo_parts.append(f"H:{hi}\u00b0")
+    if lo is not None:
+        hilo_parts.append(f"L:{lo}\u00b0")
+    hilo = "  ".join(hilo_parts)
+
     st.markdown(
-        f'<div style="color:#ffffff;font-size:2.5rem;font-weight:700;margin:4px 0">'
-        f'{icon} {current.temperature}\u00b0{current.temperature_unit}</div>'
-        f'<div style="color:#d0d0d0;font-size:1.1rem;font-weight:600;margin-bottom:12px">'
-        f'{current.short_forecast}</div>',
+        f'<div class="wx-header">'
+        f'<div class="wx-location">{display}</div>'
+        f'<div class="wx-temp">{temp}\u00b0</div>'
+        f'<div class="wx-condition">{condition}</div>'
+        f'<div class="wx-hilo">{hilo}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
 
-def _render_written_forecast(forecast: Forecast) -> None:
-    """Render written text forecast for the next 24 hours with high contrast."""
+# ---------------------------------------------------------------------------
+# Render: Hourly forecast strip
+# ---------------------------------------------------------------------------
+
+def _render_hourly(forecast: Forecast, extended: ExtendedData) -> None:
+    """Render the horizontally scrollable hourly forecast strip."""
+    if not forecast.hourly_periods:
+        return
+
+    hours = forecast.hourly_periods[:24]
+    precip = extended.hourly_precip or {}
+
+    items = ""
+    for i, h in enumerate(hours):
+        label = "Now" if i == 0 else _parse_hour(h.start_time)
+        icon = _get_weather_icon(h.short_forecast)
+
+        # Show precipitation chance if > 0%
+        chance = precip.get(h.start_time, 0)
+        precip_html = (
+            f'<div class="h-precip">{chance}%</div>'
+            if chance and chance > 0 else '<div class="h-precip"></div>'
+        )
+
+        items += (
+            f'<div class="hourly-item">'
+            f'<div class="h-time">{label}</div>'
+            f'{precip_html}'
+            f'<div class="h-icon">{icon}</div>'
+            f'<div class="h-temp">{h.temperature}\u00b0</div>'
+            f'</div>'
+        )
+
+    st.markdown(
+        f'<div class="glass-card">'
+        f'<div class="section-label">\U0001f552 HOURLY FORECAST</div>'
+        f'<div class="hourly-row">{items}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Render: 10-day forecast with temperature bars
+# ---------------------------------------------------------------------------
+
+def _extract_daily_pairs(forecast: Forecast) -> list[dict]:
+    """Extract day/night period pairs from forecast periods."""
+    days: list[dict] = []
+    i = 0
+    while i < len(forecast.periods):
+        p = forecast.periods[i]
+        day_info: dict = {
+            "name": _get_day_abbrev(p.name),
+            "full_name": p.name.replace("This Afternoon", "Today"),
+            "short": p.short_forecast,
+            "detailed": p.detailed_forecast,
+        }
+
+        if p.is_daytime:
+            day_info["high"] = p.temperature
+            if i + 1 < len(forecast.periods) and not forecast.periods[i + 1].is_daytime:
+                day_info["low"] = forecast.periods[i + 1].temperature
+                day_info["night_detailed"] = forecast.periods[i + 1].detailed_forecast
+                i += 2
+            else:
+                day_info["low"] = None
+                i += 1
+        else:
+            day_info["full_name"] = p.name
+            day_info["high"] = None
+            day_info["low"] = p.temperature
+            i += 1
+
+        days.append(day_info)
+
+    return days
+
+
+def _render_daily(forecast: Forecast) -> None:
+    """Render the multi-day forecast with Apple-style colored temp bars."""
     if not forecast.periods:
         return
 
-    st.markdown('<div class="weather-section">', unsafe_allow_html=True)
-    st.markdown('<div class="weather-section-title">Forecast</div>', unsafe_allow_html=True)
+    days = _extract_daily_pairs(forecast)
+    days = _compute_temp_bars(days)
 
-    for p in forecast.periods[:3]:
-        icon = _get_weather_icon(p.short_forecast)
-        st.markdown(
-            f'<div class="forecast-text"><strong>{icon} {p.name}</strong> — {p.detailed_forecast}</div>',
-            unsafe_allow_html=True,
+    rows = ""
+    for day in days:
+        icon = _get_weather_icon(day["short"])
+        hi = f'{day["high"]}\u00b0' if day.get("high") is not None else "--"
+        lo = f'{day["low"]}\u00b0' if day.get("low") is not None else "--"
+
+        bar_left = day.get("bar_left_pct", 0)
+        bar_width = day.get("bar_width_pct", 50)
+        color_lo = day.get("bar_color_lo", "rgba(255,255,255,0.3)")
+        color_hi = day.get("bar_color_hi", "rgba(255,255,255,0.3)")
+
+        rows += (
+            f'<div class="daily-row">'
+            f'<div class="d-name">{day["name"]}</div>'
+            f'<div class="d-icon">{icon}</div>'
+            f'<div class="d-lo">{lo}</div>'
+            f'<div class="d-bar-track">'
+            f'<div class="d-bar-fill" style="left:{bar_left:.1f}%;width:{bar_width:.1f}%;'
+            f'background:linear-gradient(90deg,{color_lo},{color_hi});">'
+            f'</div></div>'
+            f'<div class="d-hi">{hi}</div>'
+            f'</div>'
         )
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="glass-card">'
+        f'<div class="section-label">\U0001f4c5 7-DAY FORECAST</div>'
+        f'{rows}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
+    with st.expander("Detailed Forecasts"):
+        for day in days:
+            st.markdown(f"**{day['full_name']}**: {day['detailed']}")
+            if day.get("night_detailed"):
+                st.markdown(f"**{day['full_name']} Night**: {day['night_detailed']}")
+
+
+# ---------------------------------------------------------------------------
+# Render: Weather detail cards (2-column grid)
+# ---------------------------------------------------------------------------
+
+def _render_detail_cards(
+    forecast: Forecast,
+    extended: ExtendedData,
+) -> None:
+    """Render Apple Weather-style detail cards in a 2-column grid."""
+    current = extended.current
+    if not current:
+        return
+
+    # Build cards list: (emoji, label, value, note)
+    cards: list[tuple[str, str, str, str]] = []
+
+    # Feels Like
+    if current.feels_like_f is not None:
+        feels = current.feels_like_f
+        actual = current.temperature_f or feels
+        if abs(feels - actual) <= 3:
+            note = "Similar to the actual temperature."
+        elif feels < actual:
+            note = "Wind is making it feel colder."
+        else:
+            note = "Humidity is making it feel warmer."
+        cards.append(("\U0001f321\ufe0f", "FEELS LIKE", f"{feels}\u00b0", note))
+
+    # Wind
+    if current.wind_speed_mph is not None:
+        wind_val = f"{current.wind_speed_mph:.0f} mph"
+        wind_note = f"Direction: {current.wind_direction}" if current.wind_direction else ""
+        cards.append(("\U0001f32c\ufe0f", "WIND", wind_val, wind_note))
+
+    # Humidity
+    if current.humidity is not None:
+        hum_note = ""
+        if current.dewpoint_f is not None:
+            hum_note = f"Dew point: {current.dewpoint_f}\u00b0"
+        cards.append(("\U0001f4a7", "HUMIDITY", f"{current.humidity:.0f}%", hum_note))
+
+    # Visibility
+    if current.visibility_miles is not None:
+        vis = current.visibility_miles
+        vis_note = "Clear conditions." if vis >= 10 else "Reduced visibility."
+        cards.append(("\U0001f441\ufe0f", "VISIBILITY", f"{vis:.0f} mi", vis_note))
+
+    # Pressure
+    if current.pressure_mbar is not None:
+        # Convert mbar to inHg for US users
+        inhg = round(current.pressure_mbar * 0.02953, 2)
+        cards.append(("\u2b07\ufe0f", "PRESSURE", f"{inhg} inHg", f"{current.pressure_mbar:.0f} mbar"))
+
+    if not cards:
+        return
+
+    # Render in 2-column grid
+    for i in range(0, len(cards), 2):
+        cols = st.columns(2)
+        for j, col in enumerate(cols):
+            idx = i + j
+            if idx < len(cards):
+                emoji, label, value, note = cards[idx]
+                col.markdown(
+                    f'<div class="detail-card">'
+                    f'<div class="detail-label">{emoji} {label}</div>'
+                    f'<div class="detail-value">{value}</div>'
+                    f'<div class="detail-note">{note}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+# ---------------------------------------------------------------------------
+# Render: Chat Q&A
+# ---------------------------------------------------------------------------
 
 def _make_chat_callback(input_key: str):
     """Create a chat submission callback for a specific input key.
@@ -354,33 +813,26 @@ def _make_chat_callback(input_key: str):
                 {"role": "assistant", "content": f"Sorry, something went wrong: {exc}"}
             )
 
-        # Clear the input for next question
         st.session_state[input_key] = ""
 
     return _on_submit
 
 
 def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> None:
-    """Render the weather chat section with history and input.
-
-    Uses a visible labeled text_input with an Ask button beside it.
-    The label and button make it obvious this is tappable on mobile.
-    """
+    """Render the weather chat section in a glass card."""
     history_key = f"messages_{tab_key}"
     if history_key not in st.session_state:
         st.session_state[history_key] = []
 
-    # Store active context for the callback
     st.session_state["active_tab_key"] = tab_key
     st.session_state["active_forecast"] = forecast
     st.session_state["active_location"] = location
 
     api_key = config.get_anthropic_api_key()
 
-    # Always show the chat section — with or without API key
     st.markdown(
-        '<div class="weather-section">'
-        '<div class="weather-section-title">\U0001f4ac Weather Q&A</div>'
+        '<div class="glass-card">'
+        '<div class="section-label">\U0001f4ac ASK ABOUT THE WEATHER</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -392,7 +844,7 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
         )
         return
 
-    # Show chat history
+    # Chat history
     if st.session_state[history_key]:
         for msg in st.session_state[history_key]:
             if msg["role"] == "user":
@@ -402,14 +854,14 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
                 )
             else:
                 st.markdown(
-                    f'<div class="chat-assistant"><strong>Weather AI:</strong> {msg["content"]}</div>',
+                    f'<div class="chat-assistant"><strong>AI:</strong> {msg["content"]}</div>',
                     unsafe_allow_html=True,
                 )
 
-    # Input: full-width text field with visible label
+    # Input
     input_key = f"chat_input_{tab_key}"
     st.text_input(
-        "\U0001f4ac Ask a question about the weather",
+        "Ask a question",
         key=input_key,
         placeholder="Will it rain? Should I bring a jacket?",
         on_change=_make_chat_callback(input_key),
@@ -419,99 +871,12 @@ def _render_chat(forecast: Forecast, location: GeoLocation, tab_key: str) -> Non
         st.rerun()
 
 
-def _render_hourly_forecast(forecast: Forecast) -> None:
-    """Render a horizontally scrollable hourly strip (like Apple Weather)."""
-    if not forecast.hourly_periods:
-        return
-
-    hours = forecast.hourly_periods[:24]
-
-    items_html = ""
-    for h in hours:
-        icon = _get_weather_icon(h.short_forecast)
-        hour_label = _parse_hour(h.start_time)
-        items_html += (
-            f'<div class="hourly-item">'
-            f'<div class="h-time">{hour_label}</div>'
-            f'<div class="h-icon">{icon}</div>'
-            f'<div class="h-temp">{h.temperature}\u00b0</div>'
-            f'</div>'
-        )
-
-    st.markdown(
-        f'<div class="weather-section">'
-        f'<div class="weather-section-title">Hourly Forecast</div>'
-        f'<div class="hourly-row">{items_html}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _render_daily_forecast(forecast: Forecast) -> None:
-    """Render the multi-day forecast as a vertical list (like Apple Weather)."""
-    if not forecast.periods:
-        return
-
-    days: list[dict] = []
-    i = 0
-    while i < len(forecast.periods):
-        p = forecast.periods[i]
-        day_info: dict = {
-            "name": p.name.replace("This Afternoon", "Today"),
-            "short": p.short_forecast,
-            "detailed": p.detailed_forecast,
-        }
-
-        if p.is_daytime:
-            day_info["high"] = p.temperature
-            if i + 1 < len(forecast.periods) and not forecast.periods[i + 1].is_daytime:
-                day_info["low"] = forecast.periods[i + 1].temperature
-                day_info["night_detailed"] = forecast.periods[i + 1].detailed_forecast
-                i += 2
-            else:
-                day_info["low"] = None
-                i += 1
-        else:
-            day_info["name"] = p.name
-            day_info["high"] = None
-            day_info["low"] = p.temperature
-            i += 1
-
-        days.append(day_info)
-
-    rows_html = ""
-    for day in days:
-        icon = _get_weather_icon(day["short"])
-        hi = f'{day["high"]}\u00b0' if day.get("high") is not None else "--"
-        lo = f'{day["low"]}\u00b0' if day.get("low") is not None else "--"
-
-        rows_html += (
-            f'<div class="daily-row">'
-            f'<div class="d-name">{day["name"]}</div>'
-            f'<div class="d-icon">{icon}</div>'
-            f'<div class="d-lo">{lo}</div>'
-            f'<div class="d-bar"></div>'
-            f'<div class="d-hi">{hi}</div>'
-            f'</div>'
-        )
-
-    st.markdown(
-        f'<div class="weather-section">'
-        f'<div class="weather-section-title">7-Day Forecast</div>'
-        f'{rows_html}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.expander("Detailed Forecasts"):
-        for day in days:
-            st.markdown(f"**{day['name']}**: {day['detailed']}")
-            if day.get("night_detailed"):
-                st.markdown(f"**{day['name']} Night**: {day['night_detailed']}")
-
+# ---------------------------------------------------------------------------
+# Render: Full location forecast
+# ---------------------------------------------------------------------------
 
 def _render_location_forecast(location_query: str, tab_key: str) -> None:
-    """Fetch and render the full forecast for a single location."""
+    """Fetch and render the full Apple Weather-style forecast."""
     with st.spinner("Finding location..."):
         try:
             loc_data = _cached_geocode(location_query)
@@ -528,22 +893,35 @@ def _render_location_forecast(location_query: str, tab_key: str) -> None:
         display_name=loc_data["name"],
     )
 
-    with st.spinner("Fetching forecast from NWS..."):
+    with st.spinner("Fetching forecast..."):
         try:
             forecast = _cached_forecast(location.latitude, location.longitude)
         except NWSPointNotFoundError:
-            st.error("The NWS does not have forecast data for this location. Try a nearby city.")
+            st.error("NWS does not have data for this location. Try a nearby city.")
             return
         except NWSAPIError as exc:
             st.error(str(exc))
             return
 
-    # Layout (top to bottom):
-    _render_header(forecast, location)
-    _render_written_forecast(forecast)
+    # Fetch extended data (best-effort, won't crash)
+    extended = _cached_extended(location.latitude, location.longitude)
+
+    # Set dynamic background gradient
+    if forecast.periods:
+        gradient = _get_gradient(
+            forecast.periods[0].short_forecast,
+            forecast.periods[0].is_daytime,
+        )
+    else:
+        gradient = _WEATHER_GRADIENTS["default"]
+    _inject_css(gradient)
+
+    # Render all sections (Apple Weather order)
+    _render_header(forecast, location, extended)
+    _render_hourly(forecast, extended)
+    _render_daily(forecast)
+    _render_detail_cards(forecast, extended)
     _render_chat(forecast, location, tab_key)
-    _render_hourly_forecast(forecast)
-    _render_daily_forecast(forecast)
 
 
 # ---------------------------------------------------------------------------
@@ -553,74 +931,84 @@ def _render_location_forecast(location_query: str, tab_key: str) -> None:
 def main():
     """Main Streamlit application entry point."""
     st.set_page_config(
-        page_title="US Weather Forecast",
-        page_icon="\u26c5",
+        page_title="Weather",
+        page_icon="\U0001f326\ufe0f",
         layout="centered",
     )
 
-    _inject_css()
+    # Inject default CSS (will be overridden per-location)
+    _inject_css(_WEATHER_GRADIENTS["default"])
     _init_saved_locations()
 
     # --- Sidebar: manage locations ---
     with st.sidebar:
-        st.header("Manage Locations")
+        st.markdown("### \U0001f30d Locations")
 
-        st.subheader("Home Location")
-        home_input = st.text_input(
-            "Set your home city",
+        st.text_input(
+            "\U0001f3e0 Home Location",
             value=st.session_state.home_location or "",
             placeholder="e.g., Denver, CO",
             key="home_input",
         )
-        if st.button("Set as Home", key="set_home_btn"):
-            if home_input.strip():
-                _set_home(home_input)
+        if st.button("Set as Home", key="set_home_btn", use_container_width=True):
+            val = st.session_state.get("home_input", "").strip()
+            if val:
+                _set_home(val)
                 st.rerun()
 
         if st.session_state.home_location:
-            st.success(f"Home: {st.session_state.home_location}")
+            st.success(f"\U0001f3e0 {st.session_state.home_location}")
 
-        st.subheader("Saved Locations")
-        new_location = st.text_input(
-            "Add a location",
+        st.markdown("---")
+        st.text_input(
+            "Add a saved location",
             placeholder="e.g., Miami, FL",
             key="new_location_input",
         )
-        if st.button("Add Location", key="add_loc_btn"):
-            if new_location.strip():
-                _add_location(new_location)
+        if st.button("Add Location", key="add_loc_btn", use_container_width=True):
+            val = st.session_state.get("new_location_input", "").strip()
+            if val:
+                _add_location(val)
                 st.rerun()
 
         if st.session_state.saved_locations:
             for loc_name in st.session_state.saved_locations:
-                col1, col2 = st.columns([3, 1])
-                col1.write(loc_name)
-                if col2.button("X", key=f"remove_{loc_name}"):
+                col1, col2 = st.columns([4, 1])
+                col1.write(f"\U0001f4cd {loc_name}")
+                if col2.button("\u2715", key=f"rm_{loc_name}"):
                     _remove_location(loc_name)
                     st.rerun()
         else:
             st.caption("No saved locations yet.")
 
     # --- Build tab list ---
-    tab_names = []
-    tab_queries = []
+    tab_names: list[str] = []
+    tab_queries: list[str | None] = []
 
     if st.session_state.home_location:
-        tab_names.append("Home")
+        tab_names.append("\U0001f3e0 Home")
         tab_queries.append(st.session_state.home_location)
 
     for loc_name in st.session_state.saved_locations:
-        if st.session_state.home_location and loc_name.lower() == st.session_state.home_location.lower():
+        if (
+            st.session_state.home_location
+            and loc_name.lower() == st.session_state.home_location.lower()
+        ):
             continue
         tab_names.append(loc_name)
         tab_queries.append(loc_name)
 
-    tab_names.append("Search")
+    tab_names.append("\U0001f50d Search")
     tab_queries.append(None)
 
     # --- Render ---
     if len(tab_names) == 1:
-        st.info("Use the sidebar (\u00bb) to set a Home location, or search below.")
+        st.markdown(
+            '<div style="text-align:center;color:rgba(255,255,255,0.6);padding:20px 0;">'
+            'Use the sidebar (\u00bb) to add your home location, or search below.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         location_input = st.text_input(
             "Search for a US location",
             placeholder="e.g., Denver, CO  or  90210",
@@ -644,7 +1032,6 @@ def main():
                 else:
                     tab_key = query.lower().replace(" ", "_").replace(",", "")
                     _render_location_forecast(query, tab_key)
-
 
 
 if __name__ == "__main__":
